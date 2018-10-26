@@ -21,7 +21,7 @@
 /////////////////////
 // settings:
 static const char *steamGateServerURL = 
-"http://onehouronelife.com/sg/server.php";
+"http://onehouronelife.com/steamGate/server.php";
 
 #define linuxLaunchTarget "./OneLifeApp"
 #define macLaunchTarget "OneLife.app"
@@ -38,6 +38,7 @@ static const char *steamGateServerURL =
 
 #include <unistd.h>
 #include <stdarg.h>
+#include <sys/wait.h>
 
 static void launchGame() {
     AppLog::info( "Launching game." );
@@ -50,6 +51,17 @@ static void launchGame() {
         execvp( "open", arguments );
 
         // we'll never return from this call
+        }
+    else {
+        // parent
+        AppLog::infoF( "Waiting for child game process %d to exit.",
+                       forkValue );
+        double startTime = Time::getCurrentTime();
+        int returnStatus;    
+        waitpid( forkValue, &returnStatus, 0 );
+
+        AppLog::infoF( "Child game process ran for %f minutes before exiting.",
+                       ( Time::getCurrentTime() - startTime ) / 60 );
         }
     }
 
@@ -90,6 +102,7 @@ static void showMessage( const char *inTitle, const char *inMessage,
 
 #include <unistd.h>
 #include <stdarg.h>
+#include <sys/wait.h>
 
 static void launchGame() {
     AppLog::info( "Launching game" );
@@ -102,6 +115,17 @@ static void launchGame() {
         execvp( linuxLaunchTarget, arguments );
 
         // we'll never return from this call
+        }
+    else {
+        // parent
+        AppLog::infoF( "Waiting for child game process %d to exit.",
+                       forkValue );
+        double startTime = Time::getCurrentTime();
+        int returnStatus;    
+        waitpid( forkValue, &returnStatus, 0 );
+
+        AppLog::infoF( "Child game process ran for %f minutes before exiting.",
+                       ( Time::getCurrentTime() - startTime ) / 60 );
         }
     }
 
@@ -140,7 +164,13 @@ static void launchGame() {
     AppLog::info( "Launching game" );
     char *arguments[2] = { (char*)winLaunchTarget, NULL };
     
-    _spawnvp( _P_NOWAIT, winLaunchTarget, arguments );
+    AppLog::infoF( "Waiting for child game process to exit after launching." );
+    double startTime = Time::getCurrentTime();
+    
+    _spawnvp( _P_WAIT, winLaunchTarget, arguments );
+    
+    AppLog::infoF( "Child game process ran for %f minutes before exiting.",
+                   ( Time::getCurrentTime() - startTime ) / 60 );
     }
 
 
@@ -148,7 +178,7 @@ static void launchGame() {
 
 static void showMessage( const char *inTitle, const char *inMessage,
                          char inError = false ) {
-    UINT uType = MB_OK;
+    UINT uType = MB_OK | MB_TOPMOST;
     
     if( inError ) {
         uType |= MB_ICONERROR;
@@ -254,6 +284,52 @@ int main() {
     AppLog::setLog( new FileLog( "log_steamGate.txt" ) );
     AppLog::setLoggingLevel( Log::DETAIL_LEVEL );
 
+
+    // before we even check for login info, see if we've been tasked
+    // with marking the app as dirty
+    FILE *f = fopen( "steamGateForceUpdate.txt", "r" );
+    if( f != NULL ) {
+        AppLog::info( "steamGateForceUpdate.txt file exists." );
+
+        int val = 0;
+        
+        fscanf( f, "%d", &val );
+        fclose( f );
+
+
+        if( val == 1 ) {
+            AppLog::info( "steamGateForceUpdate.txt file contains '1' flag." );
+
+            // we've been signaled to mark app as dirty
+            
+            if( ! SteamAPI_Init() ) {
+                showMessage( gameName ":  Error",
+                             "Failed to connect to Steam.",
+                             true );
+                AppLog::error( "Could not init Steam API." );
+                return 0;
+                }
+
+            AppLog::info( "Calling MarkContentCorrupt." );
+
+            // only check for missing files
+            // not sure what this param does if a new depot is available
+            SteamApps()->MarkContentCorrupt( true );
+            
+            // done, mark so we skip this next time
+            f = fopen( "steamGateForceUpdate.txt", "w" );
+            if( f != NULL ) {
+                fprintf( f, "0" );
+                fclose( f );
+                }
+            
+            AppLog::info( "Done forcing update, exiting." );
+            SteamAPI_Shutdown();
+            return 0;
+            }
+        }
+
+
     char *accountKey = SettingsManager::getStringSetting( "accountKey" );
     char *email = SettingsManager::getStringSetting( "email" );
 
@@ -263,8 +339,9 @@ int main() {
         delete [] accountKey;
         delete [] email;
         
-        AppLog::info( "We already have saved login info.  Exiting." );
+        AppLog::info( "We already have saved login info.  Launching game." );
         launchGame();
+        AppLog::info( "Exiting." );
         return 0;
         }
 
@@ -546,5 +623,6 @@ int main() {
 
     launchGame();
     
+    AppLog::info( "Exiting." );
     return 0;
     }
